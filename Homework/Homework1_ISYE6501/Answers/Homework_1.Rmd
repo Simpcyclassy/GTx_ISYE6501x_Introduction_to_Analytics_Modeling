@@ -1,0 +1,189 @@
+---
+title: "Homework 1"
+---
+
+```{r}
+library(kernlab)
+library(kknn)
+
+# Load data (use the headered file for clarity)
+df <- read.table("credit_card_data-headers.txt", header = TRUE)
+
+# Quick shape & glimpse
+dim(df)
+str(df)
+head(df)
+
+# Separate predictors and response
+X <- df[, c("A1","A2","A3","A8","A9","A10","A11","A12","A14","A15")]
+y <- as.factor(df$R1)
+
+# Confirm types: 10 numeric predictors, 1 factor response
+sapply(X, class)
+table(y)
+
+# Basic sanity checks
+stopifnot(ncol(X) == 10)
+stopifnot(length(y) == nrow(X))
+anyNA(df)
+summary(X)
+```
+
+
+
+```{r}
+# PART A: SVM CLASSIFICATION
+
+# Helper: fit one model, return metrics ----
+fit_once <- function(Cval) {
+  mod <- ksvm(
+    x = as.matrix(X), y = y,
+    type   = "C-svc",
+    kernel = "vanilladot",   # linear
+    C      = Cval,
+    scaled = TRUE
+  )
+  pred <- predict(mod, as.matrix(X))
+  acc  <- mean(pred == y)
+  tbl  <- table(pred)           # check collapse to one class
+  list(model = mod, pred = pred, acc = acc, pred_table = tbl)
+}
+
+# ---- Sweep C over orders of magnitude ----
+C_grid <- 10 ^ seq(-3, 3, by = 1)   # 0.001 ... 1000
+runs <- lapply(C_grid, fit_once)
+
+# Collect results
+accs <- sapply(runs, function(r) r$acc)
+pred_tabs <- lapply(runs, function(r) r$pred_table)
+
+res <- data.frame(
+  C = C_grid,
+  Accuracy = round(accs, 4),
+  Pred0 = sapply(pred_tabs, function(t) ifelse("0" %in% names(t), as.integer(t["0"]), 0L)),
+  Pred1 = sapply(pred_tabs, function(t) ifelse("1" %in% names(t), as.integer(t["1"]), 0L))
+)
+print(res)
+```
+
+
+```{r}
+# ---- Pick a good C ----
+# Rule: choose the C with the highest accuracy; if ties, pick the mid-range one.
+best_idx <- which(accs == max(accs))
+best_idx <- best_idx[ceiling(length(best_idx)/2)]
+best_C   <- C_grid[best_idx]
+cat("\nChosen C:", best_C, "\n")
+
+best_run <- runs[[best_idx]]
+best_mod <- best_run$model
+best_pred <- best_run$pred
+cat("Training accuracy at C =", best_C, ":", round(best_run$acc, 4), "\n")
+cat("Prediction balance (counts):\n"); print(best_run$pred_table)
+```
+
+```{r}
+# ---- Extract linear classifier equation (weights & intercept) ----
+# a = weights for features (on scaled features); a0 = intercept
+a  <- colSums(best_mod@xmatrix[[1]] * best_mod@coef[[1]])
+a0 <- -best_mod@b
+
+cat("\nIntercept (a0):", as.numeric(a0), "\n")
+cat("Weights (a1..a10) in feature order A1,A2,A3,A8,A9,A10,A11,A12,A14,A15:\n")
+print(as.numeric(a))
+
+# Pretty print as decision function:
+# sign( a0 + sum_j a_j * z_j ), where z_j are the z-scored (scaled) features used in training
+cat("\nDecision function on SCALED features:\n")
+eq <- paste0(
+  "f(z) = ", round(as.numeric(a0), 6), " + ",
+  paste(paste0(round(as.numeric(a), 6), " * ", colnames(X)), collapse = " + "),
+  "  (features scaled by ksvm)"
+)
+cat(eq, "\n")
+```
+
+```{r}
+# ---- Simple confusion matrix on training data ----
+cat("\nConfusion matrix (training):\n")
+print(table(Actual = y, Pred = best_pred))
+```
+
+
+
+```{r}
+
+Xm <- as.matrix(X)
+
+## RBF (Gaussian)
+sigma <- as.numeric(sigest(Xm))[2]           # median estimate
+for (C in c(0.1,1,10)) {
+  m <- ksvm(Xm, y, type="C-svc", kernel="rbfdot",
+            kpar=list(sigma=sigma), C=C, scaled=TRUE)
+  cat("RBF  C=", C, " acc=", mean(predict(m, Xm)==y), "\n")
+}
+
+## Polynomial (degree 2–3 as a quick check)
+for (d in c(2,3)) for (C in c(0.1,1,10)) {
+  m <- ksvm(Xm, y, type="C-svc", kernel="polydot",
+            kpar=list(degree=d, scale=1, offset=1), C=C, scaled=TRUE)
+  cat("Poly d=", d, " C=", C, " acc=", mean(predict(m, Xm)==y), "\n")
+}
+
+```
+
+```{r}
+# PART B: kNN CLASSIFICATION
+
+# Grid of odd k values
+k_grid <- c(1, 3, 5, 7, 9, 11, 15)
+
+# Leave-one-out prediction (exclude row i when predicting i)
+predict_loocv <- function(k) {
+  preds <- character(nrow(X))          # store predicted class labels as characters
+  for (i in seq_len(nrow(X))) {
+    trX <- X[-i, , drop = FALSE]
+    trY <- y[-i]
+    teX <- X[i, , drop = FALSE]
+
+    fit <- kknn(trY ~ ., 
+                train = data.frame(trX, trY),
+                test  = data.frame(teX),
+                k     = k,
+                scale = TRUE)
+
+    # kknn::fitted() returns the *class label* (factor). Coerce to character to store.
+    preds[i] <- as.character(fitted(fit))
+  }
+  factor(preds, levels = levels(y))    # return factor with same levels as y
+}
+
+res <- lapply(k_grid, function(k) {
+  pr  <- predict_loocv(k)
+  acc <- mean(pr == y)
+  cm  <- table(Actual = y, Pred = pr)
+  list(k = k, acc = acc, cm = cm)
+})
+
+# Summary table
+knn_summary <- data.frame(
+  k        = k_grid,
+  Accuracy = round(sapply(res, `[[`, "acc"), 4)
+)
+print(knn_summary)
+
+# Pick best k (mid of ties)
+best_idx <- which(knn_summary$Accuracy == max(knn_summary$Accuracy))
+best_idx <- best_idx[ceiling(length(best_idx)/2)]
+best_k   <- k_grid[best_idx]
+cat("\nChosen k:", best_k, "\n")
+
+# Show confusion matrix for chosen k
+print(res[[best_idx]]$cm)
+
+
+```
+
+
+
+

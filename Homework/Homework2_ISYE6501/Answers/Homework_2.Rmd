@@ -1,0 +1,140 @@
+---
+title: "Homework 2"
+---
+
+```{r}
+library(kknn)
+df <- read.table("credit_card_data-headers.txt", header = TRUE)
+X  <- df[, c("A1","A2","A3","A8","A9","A10","A11","A12","A14","A15")]
+y  <- factor(df$R1)
+
+# ---- Stratified 5-folds ----
+K <- 5
+i0 <- which(y=="0"); i1 <- which(y=="1")
+fold0 <- split(sample(i0), rep(1:K, length.out=length(i0)))
+fold1 <- split(sample(i1), rep(1:K, length.out=length(i1)))
+folds <- lapply(1:K, function(k) sort(c(fold0[[k]], fold1[[k]])))
+
+# ---- CV over k ----
+k_grid <- c(1,3,5,7,9,11,15,21,31)
+
+cv_table <- lapply(k_grid, function(k){
+  acc <- numeric(K)
+  for (i in 1:K){
+    te <- folds[[i]]; tr <- setdiff(seq_len(nrow(X)), te)
+    fit <- kknn(y[tr] ~ ., train = data.frame(X[tr,], y=y[tr]),
+                test  = data.frame(X[te,]), k = k, scale = TRUE)
+    pred <- fitted(fit)                    # predicted class labels
+    acc[i] <- mean(pred == y[te])
+  }
+  c(k = k, mean_acc = mean(acc), sd_acc = sd(acc))
+})
+
+cv_res <- data.frame(do.call(rbind, cv_table))
+cv_res$mean_acc <- round(cv_res$mean_acc, 4)
+cv_res$sd_acc   <- round(cv_res$sd_acc, 4)
+cv_res[order(-cv_res$mean_acc, cv_res$sd_acc), ]
+best_k <- cv_res$k[ which.max(cv_res$mean_acc) ]
+best_k
+
+# CV accuracy vs k  (uses your cv_res from kNN)
+plot(cv_res$k, cv_res$mean_acc, type="b", pch=19,
+     xlab="k", ylab="CV accuracy")
+```
+
+
+
+```{r}
+library(kernlab)
+set.seed(99)
+
+n  <- nrow(X)
+i0 <- sample(which(y=="0"))
+i1 <- sample(which(y=="1"))
+
+split_strat <- function(idx, p_train=0.6, p_val=0.2){
+  n  <- length(idx)
+  ntr <- floor(p_train*n)
+  nva <- floor(p_val*n)
+  list(tr = idx[1:ntr],
+       va = idx[(ntr+1):(ntr+nva)],
+       te = idx[(ntr+nva+1):n])
+}
+sp0 <- split_strat(i0); sp1 <- split_strat(i1)
+tr <- c(sp0$tr, sp1$tr); va <- c(sp0$va, sp1$va); te <- c(sp0$te, sp1$te)
+
+# ---- Tune C on validation set ----
+C_grid <- 10 ^ seq(-3, 3)
+val_acc <- sapply(C_grid, function(C){
+  m <- ksvm(as.matrix(X[tr,]), y[tr], type="C-svc",
+            kernel="vanilladot", C=C, scaled=TRUE)
+  p <- predict(m, as.matrix(X[va,]))
+  mean(p == y[va])
+})
+C_star <- C_grid[ which.max(val_acc) ]; C_star
+
+# ---- Retrain on TRAIN+VAL; one-shot TEST ----
+trva <- c(tr, va)
+m_final <- ksvm(as.matrix(X[trva,]), y[trva], type="C-svc",
+                kernel="vanilladot", C=C_star, scaled=TRUE)
+p_te <- predict(m_final, as.matrix(X[te,]))
+acc_te <- mean(p_te == y[te])
+cm_te  <- table(Actual=y[te], Pred=p_te)
+acc_te; cm_te
+# Validation accuracy vs C (uses your C_grid and val_acc from SVM)
+plot(C_grid, val_acc, type="b", log="x", pch=19,
+     xlab="C (log scale)", ylab="Validation accuracy")
+
+```
+
+
+```{r}
+# ---- Iris k-means: search predictors × k ----
+set.seed(7)
+data(iris)
+Xall <- iris[, 1:4]
+y    <- iris$Species
+pnames <- colnames(Xall)
+
+# All 2-, 3-, and 4-feature combos
+combos <- unlist(lapply(2:4, function(m) combn(pnames, m, simplify = FALSE)), recursive = FALSE)
+k_grid <- 2:6
+
+score_kmeans <- function(X, k, nstart = 50) {
+  Z  <- scale(X)                               # standardize
+  km <- kmeans(Z, centers = k, nstart = nstart)
+  # Map clusters -> species by majority vote
+  map <- sapply(1:k, function(cl) {
+    names(which.max(table(y[km$cluster == cl])))
+  })
+  pred <- factor(map[km$cluster], levels = levels(y))
+  acc  <- mean(pred == y)
+  cm   <- table(Actual = y, Pred = pred)
+  list(acc = acc, cm = cm, pred = pred, features = colnames(X), k = k)
+}
+
+best <- NULL
+all_runs <- list()
+for (feat in combos) {
+  Xi <- Xall[, feat, drop = FALSE]
+  for (k in k_grid) {
+    r <- score_kmeans(Xi, k)
+    all_runs[[paste(feat, k, collapse = "|")]] <- r
+    if (is.null(best) || r$acc > best$acc) best <- r
+  }
+}
+
+# Results:
+best$features   # best predictor names
+best$k          # suggested k
+best$acc        # accuracy after mapping clusters -> species
+best$cm         # confusion matrix
+
+```
+
+
+
+
+
+
+

@@ -1,0 +1,58 @@
+---
+title: "Homework 6"
+---
+
+```{r}
+# Load and Prepare the Data
+crime <- read.table("uscrime.txt", header = TRUE)
+predictors <- crime[, -which(names(crime) == "Crime")]
+pca_result <- prcomp(predictors, scale. = TRUE)
+
+# Choose Principal Components (first 5)
+pc_data <- data.frame(Crime = crime$Crime, pca_result$x[, 1:5])
+
+# Fit Regression Model Using Principal Components
+model_pca <- lm(Crime ~ ., data = pc_data)
+summary(model_pca)
+
+# New city data
+new_city <- data.frame(M = 14.0, So = 0, Ed = 10.0, Po1 = 12.0, Po2 = 15.5,
+                       LF = 0.640, M.F = 94.0, Pop = 150, NW = 1.1,
+                       U1 = 0.120, U2 = 3.6, Wealth = 3200, Ineq = 20.1,
+                       Prob = 0.04, Time = 39.0)
+
+# Manually scale new city data using PCA center and scale
+scaled_values <- Map(function(x, mean, sd) (x - mean) / sd,
+                     new_city, pca_result$center, pca_result$scale)
+
+scaled_city <- as.data.frame(scaled_values)
+names(scaled_city) <- names(new_city)
+
+# Project scaled data into PCA space
+city_pc <- predict(pca_result, newdata = scaled_city)[, 1:5]
+
+# Name the principal components to match model
+city_pc_df <- data.frame(matrix(city_pc, nrow = 1))
+names(city_pc_df) <- paste0("PC", 1:5)
+
+# Predict crime rate
+predicted_crime <- predict(model_pca, newdata = city_pc_df)
+predicted_crime
+
+# Extract standard deviations of principal components
+std_devs <- pca_result$sdev
+
+# Plot manually with labeled axes
+plot(std_devs,
+     type = "b",
+     main = "Scree Plot of Principal Components",
+     xlab = "Principal Component Number",
+     ylab = "Standard Deviation")
+
+# Residual Plot: Model Fit Diagnostics
+plot(model_pca$residuals,
+     main = "Residuals of PCA Regression",
+     xlab = "Observation Index",
+     ylab = "Residual Value")
+
+```

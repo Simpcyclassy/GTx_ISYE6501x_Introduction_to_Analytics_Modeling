@@ -1,0 +1,116 @@
+---
+title: "Homework 7"
+---
+
+```{r}
+# (a) Regression Tree Model
+#install.packages("rpart.plot")
+
+library(rpart)
+library(rpart.plot)
+
+# Load data
+crime <- read.table("uscrime.txt", header = TRUE)
+
+# Fit regression tree
+tree_model <- rpart(Crime ~ ., data = crime, method = "anova")
+
+# Plot tree
+rpart.plot(tree_model)
+
+# Predict for new city
+new_city <- data.frame(M = 14.0, So = 0, Ed = 10.0, Po1 = 12.0, Po2 = 15.5, LF = 0.640, M.F = 94.0,
+                       Pop = 150, NW = 1.1, U1 = 0.120, U2 = 3.6, Wealth = 3200, Ineq = 20.1,
+                       Prob = 0.04, Time = 39.0)
+
+predict(tree_model, newdata = new_city)
+```
+
+
+
+```{r}
+# install.packages("randomForest")
+library(randomForest)
+# Fit random forest
+set.seed(123)
+rf_model <- randomForest(Crime ~ ., data = crime, importance = TRUE)
+
+# Predict for new city
+predict(rf_model, newdata = new_city)
+
+# View variable importance
+importance(rf_model)
+varImpPlot(rf_model)
+```
+
+```{r}
+# Question 10.3
+# install.packages("pROC")
+
+# Load necessary libraries
+library(tidyverse)
+library(pROC)
+
+# Read the data
+credit_data <- read.table("germancredit.txt", header = FALSE)
+
+# Assign column names (based on UCI dataset description)
+colnames(credit_data) <- c(
+  "Status", "Duration", "CreditHistory", "Purpose", "CreditAmount", "Savings",
+  "Employment", "InstallmentRate", "PersonalStatus", "OtherDebtors", "ResidenceDuration",
+  "Property", "Age", "OtherInstallments", "Housing", "ExistingCredits", "Job",
+  "LiablePeople", "Telephone", "ForeignWorker", "CreditRisk"
+)
+
+# Convert categorical variables to factors
+credit_data <- credit_data %>%
+  mutate(across(c(Status, CreditHistory, Purpose, Savings, Employment, PersonalStatus,
+                  OtherDebtors, Property, OtherInstallments, Housing, Job,
+                  Telephone, ForeignWorker), as.factor))
+
+# Convert response variable: 1 = good, 2 = bad → 1 = good, 0 = bad
+credit_data$CreditRisk <- ifelse(credit_data$CreditRisk == 1, 1, 0)
+
+
+
+# Fit logistic regression model
+logit_model <- glm(CreditRisk ~ ., data = credit_data, family = binomial(link = "logit"))
+
+# View model summary
+summary(logit_model)
+
+
+
+# Evaluate Model Fit McFadden's pseudo R-squared
+null_dev <- logit_model$null.deviance
+resid_dev <- logit_model$deviance
+pseudo_R2 <- 1 - (resid_dev / null_dev)
+pseudo_R2
+
+# Get predicted probabilities
+pred_probs <- predict(logit_model, type = "response")
+
+# ROC analysis
+roc_obj <- roc(credit_data$CreditRisk, pred_probs)
+
+# Plot ROC curve
+plot(roc_obj, main = "ROC Curve for Credit Risk Model")
+
+# Find threshold minimizing cost (FP cost = 5, FN cost = 1)
+thresholds <- coords(roc_obj, x = "all", ret = c("threshold", "sensitivity", "specificity"), transpose = FALSE)
+
+# Calculate expected cost for each threshold
+thresholds$cost <- (1 - thresholds$sensitivity) * 1 + (1 - thresholds$specificity) * 5
+
+# Find threshold with minimum cost
+best_threshold <- thresholds$threshold[which.min(thresholds$cost)]
+best_threshold
+
+# Classify using optimal threshold
+pred_class <- ifelse(pred_probs > best_threshold, 1, 0)
+
+# Confusion matrix
+table(Predicted = pred_class, Actual = credit_data$CreditRisk)
+
+```
+
