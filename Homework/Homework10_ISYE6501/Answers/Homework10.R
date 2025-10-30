@@ -1,0 +1,126 @@
+# Question 14.1
+# install.packages("tidyverse")
+# install.packages("e1071")
+# install.packages("class")
+# install.packages("caret")
+
+# Load libraries
+library(tidyverse)
+library(e1071)   # For SVM
+library(class)   # For KNN
+library(caret)   # For preprocessing and evaluation
+
+# Load and clean data
+data <- read.csv("breast-cancer-wisconsin.data.txt", header = FALSE, na.strings = "?")
+colnames(data) <- c("ID", "Clump", "CellSize", "CellShape", "Adhesion", "EpiSize",
+                    "BareNuclei", "Chromatin", "Nucleoli", "Mitoses", "Class")
+data$Class <- factor(data$Class, levels = c(2, 4), labels = c("Benign", "Malignant"))
+
+# Drop ID column
+data <- data[ , -1]
+
+# Create binary indicator for missingness
+data$MissingIndicator <- ifelse(is.na(data$BareNuclei), 1, 0)
+
+# Split into training/test sets
+set.seed(42)
+trainIndex <- createDataPartition(data$Class, p = 0.8, list = FALSE)
+train <- data[trainIndex, ]
+test <- data[-trainIndex, ]
+# 1. Mean/Mode Imputation
+mean_mode <- train
+mean_mode$BareNuclei[is.na(mean_mode$BareNuclei)] <- round(mean(mean_mode$BareNuclei, na.rm = TRUE))
+
+cat("Sample rows BEFORE imputation:\n")
+train %>%
+  filter(is.na(BareNuclei)) %>%
+  select(BareNuclei, everything()) %>%
+  head(5)
+
+cat("\n Sample rows AFTER mean imputation:\n")
+mean_mode %>%
+  filter(MissingIndicator == 1) %>%
+  select(BareNuclei, everything()) %>%
+  head(5)
+
+# 2. Regression Imputation
+regression <- train
+model <- lm(BareNuclei ~ ., data = regression[!is.na(regression$BareNuclei), -c(10, 11)])
+predicted <- predict(model, newdata = regression[is.na(regression$BareNuclei), ])
+regression$BareNuclei[is.na(regression$BareNuclei)] <- round(predicted)
+
+# Show sample rows AFTER regression imputation
+regression %>%
+  filter(MissingIndicator == 1) %>%
+  select(BareNuclei, everything()) %>%
+  head(5)
+
+
+# 3. Regression + Perturbation
+reg_perturb <- train
+noise <- rnorm(length(predicted), mean = 0, sd = sd(predicted) * 0.05)
+reg_perturb$BareNuclei[is.na(reg_perturb$BareNuclei)] <- round(predicted + noise)
+
+# Show sample rows AFTER regression + perturbation
+reg_perturb %>%
+  filter(MissingIndicator == 1) %>%
+  select(BareNuclei, everything()) %>%
+  head(5)
+
+# 4a. Remove rows with missing BareNuclei
+dropped <- train %>% filter(!is.na(BareNuclei))
+
+# 4b. Binary Indicator version already exists as `train`
+
+# Function to train and evaluate SVM and KNN models
+evaluate_models <- function(df, test) {
+  # Ensure BareNuclei is numeric
+  df$BareNuclei <- as.numeric(df$BareNuclei)
+  test$BareNuclei <- as.numeric(test$BareNuclei)
+  
+  # Impute any remaining NAs in BareNuclei
+  if (any(is.na(df$BareNuclei))) {
+    df$BareNuclei[is.na(df$BareNuclei)] <- round(mean(df$BareNuclei, na.rm = TRUE))
+  }
+  if (any(is.na(test$BareNuclei))) {
+    test$BareNuclei[is.na(test$BareNuclei)] <- round(mean(df$BareNuclei, na.rm = TRUE))
+  }
+  
+  # Replace any other NAs in the dataset (KNN cannot handle NAs)
+  df[is.na(df)] <- 0
+  test[is.na(test)] <- 0
+  
+  # Train SVM model
+  svm_model <- svm(Class ~ ., data = df)
+  svm_pred <- predict(svm_model, test)
+  svm_acc <- mean(svm_pred == test$Class)
+  
+  # Train KNN model (exclude Class column)
+  knn_pred <- knn(train = df %>% select(-Class),
+                  test = test %>% select(-Class),
+                  cl = df$Class, k = 5)
+  knn_acc <- mean(knn_pred == test$Class)
+  
+  return(c(SVM = round(svm_acc * 100, 2), KNN = round(knn_acc * 100, 2)))
+}
+
+# Evaluate all dataset versions
+results <- tibble(
+  Version = c("Mean Imputation", "Regression", "Regression + Perturbation", "Dropped Rows", "Binary Indicator"),
+  SVM_Accuracy = c(
+    evaluate_models(mean_mode, test)[1],
+    evaluate_models(regression, test)[1],
+    evaluate_models(reg_perturb, test)[1],
+    evaluate_models(dropped, test)[1],
+    evaluate_models(train, test)[1]
+  ),
+  KNN_Accuracy = c(
+    evaluate_models(mean_mode, test)[2],
+    evaluate_models(regression, test)[2],
+    evaluate_models(reg_perturb, test)[2],
+    evaluate_models(dropped, test)[2],
+    evaluate_models(train, test)[2]
+  )
+)
+
+print(results)
